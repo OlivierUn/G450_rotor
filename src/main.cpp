@@ -4,7 +4,7 @@
  *  ESP32-C3
  * ============================================================
  *
- *  Version : 0.2.3
+ *  Version : 0.3.0
  *  Date    : 17/08/2026
  *  Auteur  : F4AFO
  *
@@ -34,8 +34,16 @@
  *
  *  V0.2.3 - Version propre apres validation
  *           - Suppression du diagnostic bouton SETUP
- *           - Conservation calibration 5 points
- *           - Sauvegarde flash fonctionnelle
+ *           - Calibration 5 points validee
+ *
+ *  V0.3.0 - Asservissement automatique azimut
+ *           - Commande serie Axxx
+ *           - Commande STOP serie S
+ *           - Tolerance cible +/- 4 degres
+ *           - Arret definitif lorsque la cible est atteinte
+ *           - Priorite aux commandes manuelles
+ *           - Affichage cible sur OLED
+ *           - Suppression du debug ADC/Angle permanent
  *
  * ============================================================
  */
@@ -109,10 +117,24 @@ bool calibrationValide = false;
 
 
 // ============================================================
+// ASSERVISSEMENT AZIMUT
+// ============================================================
+
+const float TOLERANCE_ANGLE = 4.0;
+
+bool modeAutomatiqueAzimut = false;
+bool cibleAzimutAtteinte = false;
+
+float angleCibleAzimut = 0.0;
+
+
+// ============================================================
 // VARIABLES
 // ============================================================
 
 float angleFiltre = 0;
+
+String commandeSerie = "";
 
 
 // ============================================================
@@ -125,6 +147,7 @@ void stopRotor()
   digitalWrite(PIN_RELAIS_CCW, HIGH);
 }
 
+
 void rotationCW()
 {
   digitalWrite(PIN_RELAIS_CCW, HIGH);
@@ -133,6 +156,7 @@ void rotationCW()
 
   digitalWrite(PIN_RELAIS_CW, LOW);
 }
+
 
 void rotationCCW()
 {
@@ -229,11 +253,21 @@ float filtrerAngle(float nouvelAngle)
 // AFFICHAGE NORMAL
 // ============================================================
 
-void afficher(float angle, const char *etat)
+void afficher(
+  float angle,
+  const char *etat
+)
 {
   display.clearDisplay();
 
-  display.setTextColor(SSD1306_WHITE);
+  display.setTextColor(
+    SSD1306_WHITE
+  );
+
+
+  // ----------------------------------------------------------
+  // Titre
+  // ----------------------------------------------------------
 
   display.setTextSize(1);
 
@@ -241,9 +275,16 @@ void afficher(float angle, const char *etat)
 
   display.print("AZIMUT");
 
+
+  // ----------------------------------------------------------
+  // Angle
+  // ----------------------------------------------------------
+
   display.setTextSize(4);
 
-  int angleAffiche = round(angle);
+  int angleAffiche =
+    round(angle);
+
 
   if (strcmp(etat, "CCW") == 0)
   {
@@ -276,11 +317,43 @@ void afficher(float angle, const char *etat)
     display.print((char)247);
   }
 
+
+  // ----------------------------------------------------------
+  // Ligne basse
+  // ----------------------------------------------------------
+
   display.setTextSize(1);
 
-  display.setCursor(70, 52);
+
+  if (modeAutomatiqueAzimut)
+  {
+    display.setCursor(0, 52);
+
+    display.print("AUTO ");
+
+    display.print(
+      round(angleCibleAzimut)
+    );
+
+    display.print((char)247);
+  }
+
+  else if (cibleAzimutAtteinte)
+  {
+    display.setCursor(0, 52);
+
+    display.print("CIBLE OK");
+  }
+
+
+  // ----------------------------------------------------------
+  // Indicatif
+  // ----------------------------------------------------------
+
+  display.setCursor(92, 52);
 
   display.print("F4AFO");
+
 
   display.display();
 }
@@ -297,7 +370,9 @@ void afficherCalibration(
 {
   display.clearDisplay();
 
-  display.setTextColor(SSD1306_WHITE);
+  display.setTextColor(
+    SSD1306_WHITE
+  );
 
   display.setTextSize(1);
 
@@ -419,6 +494,267 @@ void chargerCalibration()
 
 
 // ============================================================
+// CIBLE AZIMUT
+// ============================================================
+
+void definirCibleAzimut(
+  float angle
+)
+{
+  if (angle < 0)
+  {
+    angle = 0;
+  }
+
+  if (angle > 360)
+  {
+    angle = 360;
+  }
+
+  angleCibleAzimut =
+    angle;
+
+  cibleAzimutAtteinte =
+    false;
+
+  modeAutomatiqueAzimut =
+    true;
+
+
+  Serial.print(
+    "NOUVELLE CIBLE AZIMUT : "
+  );
+
+  Serial.print(
+    angleCibleAzimut,
+    1
+  );
+
+  Serial.println(
+    " deg"
+  );
+}
+
+
+// ============================================================
+// ANNULATION CIBLE
+// ============================================================
+
+void annulerCibleAzimut()
+{
+  stopRotor();
+
+  modeAutomatiqueAzimut =
+    false;
+
+  cibleAzimutAtteinte =
+    false;
+
+
+  Serial.println(
+    "COMMANDE AUTO ANNULEE"
+  );
+}
+
+
+// ============================================================
+// PILOTAGE AUTOMATIQUE
+// ============================================================
+
+const char *piloterAzimutAutomatique(
+  float angleActuel
+)
+{
+  if (!modeAutomatiqueAzimut)
+  {
+    return "STOP";
+  }
+
+
+  float erreur =
+    angleCibleAzimut -
+    angleActuel;
+
+
+  // ----------------------------------------------------------
+  // CIBLE ATTEINTE
+  // ----------------------------------------------------------
+
+  if (
+    abs(erreur)
+    <= TOLERANCE_ANGLE
+  )
+  {
+    stopRotor();
+
+    modeAutomatiqueAzimut =
+      false;
+
+    cibleAzimutAtteinte =
+      true;
+
+
+    Serial.print(
+      "CIBLE ATTEINTE : "
+    );
+
+    Serial.print(
+      angleActuel,
+      1
+    );
+
+    Serial.println(
+      " deg"
+    );
+
+
+    return "STOP";
+  }
+
+
+  // ----------------------------------------------------------
+  // CIBLE PLUS GRANDE -> CW
+  // ----------------------------------------------------------
+
+  if (erreur > 0)
+  {
+    rotationCW();
+
+    return "CW";
+  }
+
+
+  // ----------------------------------------------------------
+  // CIBLE PLUS PETITE -> CCW
+  // ----------------------------------------------------------
+
+  rotationCCW();
+
+  return "CCW";
+}
+
+
+// ============================================================
+// TRAITEMENT COMMANDE SERIE
+// ============================================================
+
+void traiterCommandeSerie(
+  String commande
+)
+{
+  commande.trim();
+
+  commande.toUpperCase();
+
+
+  if (commande.length() == 0)
+  {
+    return;
+  }
+
+
+  // ----------------------------------------------------------
+  // STOP
+  // ----------------------------------------------------------
+
+  if (commande == "S")
+  {
+    annulerCibleAzimut();
+
+    return;
+  }
+
+
+  // ----------------------------------------------------------
+  // Axxx
+  //
+  // Exemples :
+  // A45
+  // A180
+  // A270
+  // ----------------------------------------------------------
+
+  if (
+    commande.charAt(0) == 'A'
+  )
+  {
+    String valeur =
+      commande.substring(1);
+
+
+    float angle =
+      valeur.toFloat();
+
+
+    if (
+      angle >= 0 &&
+      angle <= 360
+    )
+    {
+      definirCibleAzimut(
+        angle
+      );
+    }
+
+    else
+    {
+      Serial.println(
+        "ERREUR : angle autorise 0..360"
+      );
+    }
+
+    return;
+  }
+
+
+  Serial.println(
+    "COMMANDE INCONNUE"
+  );
+}
+
+
+// ============================================================
+// LECTURE PORT SERIE
+// ============================================================
+
+void lireCommandeSerie()
+{
+  while (
+    Serial.available() > 0
+  )
+  {
+    char caractere =
+      Serial.read();
+
+
+    if (
+      caractere == '\n' ||
+      caractere == '\r'
+    )
+    {
+      if (
+        commandeSerie.length() > 0
+      )
+      {
+        traiterCommandeSerie(
+          commandeSerie
+        );
+
+        commandeSerie =
+          "";
+      }
+    }
+
+    else
+    {
+      commandeSerie +=
+        caractere;
+    }
+  }
+}
+
+
+// ============================================================
 // DETECTION ENTREE CALIBRATION
 // ============================================================
 
@@ -431,12 +767,15 @@ bool demandeCalibration()
       PIN_BOUTON_SETUP
     ) == LOW;
 
+
   if (setupAppuye)
   {
     if (debutAppui == 0)
     {
-      debutAppui = millis();
+      debutAppui =
+        millis();
     }
+
 
     if (
       millis() - debutAppui
@@ -454,6 +793,7 @@ bool demandeCalibration()
     debutAppui = 0;
   }
 
+
   return false;
 }
 
@@ -464,7 +804,14 @@ bool demandeCalibration()
 
 void modeCalibration()
 {
+  annulerCibleAzimut();
+
   stopRotor();
+
+
+  // ----------------------------------------------------------
+  // Attendre relachement SETUP
+  // ----------------------------------------------------------
 
   while (
     digitalRead(
@@ -475,13 +822,20 @@ void modeCalibration()
     delay(10);
   }
 
+
   delay(300);
+
+
+  // ==========================================================
+  // 5 POINTS
+  // ==========================================================
 
   for (int point = 0;
        point < NB_POINTS_CAL;
        point++)
   {
     bool pointValide = false;
+
 
     while (!pointValide)
     {
@@ -490,23 +844,28 @@ void modeCalibration()
           PIN_BOUTON_GAUCHE
         ) == LOW;
 
+
       bool droite =
         digitalRead(
           PIN_BOUTON_DROITE
         ) == LOW;
+
 
       bool setup =
         digitalRead(
           PIN_BOUTON_SETUP
         ) == LOW;
 
+
       uint16_t adc =
         lireADC();
+
 
       afficherCalibration(
         point,
         adc
       );
+
 
       if (
         gauche &&
@@ -529,14 +888,17 @@ void modeCalibration()
         stopRotor();
       }
 
+
       if (setup)
       {
         stopRotor();
 
         delay(150);
 
+
         adcCalibration[point] =
           lireADC();
+
 
         Serial.print(
           "POINT "
@@ -554,7 +916,9 @@ void modeCalibration()
           adcCalibration[point]
         );
 
+
         pointValide = true;
+
 
         while (
           digitalRead(
@@ -565,11 +929,18 @@ void modeCalibration()
           delay(10);
         }
 
+
         delay(300);
       }
 
+
       delay(20);
     }
+
+
+    // --------------------------------------------------------
+    // Confirmation point
+    // --------------------------------------------------------
 
     display.clearDisplay();
 
@@ -605,6 +976,7 @@ void modeCalibration()
 
     display.display();
 
+
     delay(700);
   }
 
@@ -613,7 +985,9 @@ void modeCalibration()
   // VERIFICATION COHERENCE
   // ==========================================================
 
-  bool valeursCorrectes = true;
+  bool valeursCorrectes =
+    true;
+
 
   for (int i = 0;
        i < NB_POINTS_CAL - 1;
@@ -624,7 +998,8 @@ void modeCalibration()
       <= adcCalibration[i]
     )
     {
-      valeursCorrectes = false;
+      valeursCorrectes =
+        false;
     }
   }
 
@@ -637,9 +1012,11 @@ void modeCalibration()
   {
     sauvegarderCalibration();
 
+
     Serial.println(
       "CALIBRATION SAUVEGARDEE"
     );
+
 
     display.clearDisplay();
 
@@ -675,6 +1052,7 @@ void modeCalibration()
     Serial.println(
       "ERREUR CALIBRATION : ADC NON CROISSANTS"
     );
+
 
     display.clearDisplay();
 
@@ -714,9 +1092,11 @@ void modeCalibration()
     display.display();
   }
 
+
   stopRotor();
 
   delay(2000);
+
 
   angleFiltre =
     adcVersAngle(
@@ -749,6 +1129,7 @@ void setup()
     PIN_RELAIS_CCW,
     OUTPUT
   );
+
 
   digitalWrite(
     PIN_RELAIS_CW,
@@ -825,14 +1206,39 @@ void setup()
 
   chargerCalibration();
 
+
   angleFiltre =
     adcVersAngle(
       lireADC()
     );
 
+
   display.clearDisplay();
 
   display.display();
+
+
+  // ----------------------------------------------------------
+  // Informations serie
+  // ----------------------------------------------------------
+
+  Serial.println();
+
+  Serial.println(
+    "G-450C V0.3.0"
+  );
+
+  Serial.println(
+    "Commandes :"
+  );
+
+  Serial.println(
+    "A180 = aller a 180 deg"
+  );
+
+  Serial.println(
+    "S = STOP"
+  );
 }
 
 
@@ -843,7 +1249,14 @@ void setup()
 void loop()
 {
   // ----------------------------------------------------------
-  // Entree calibration
+  // Commandes serie
+  // ----------------------------------------------------------
+
+  lireCommandeSerie();
+
+
+  // ----------------------------------------------------------
+  // Calibration
   // ----------------------------------------------------------
 
   if (
@@ -857,7 +1270,27 @@ void loop()
 
 
   // ----------------------------------------------------------
-  // Boutons manuels
+  // Lecture position
+  // ----------------------------------------------------------
+
+  uint16_t adc =
+    lireADC();
+
+
+  float angleBrut =
+    adcVersAngle(
+      adc
+    );
+
+
+  float angle =
+    filtrerAngle(
+      angleBrut
+    );
+
+
+  // ----------------------------------------------------------
+  // Lecture boutons manuels
   // ----------------------------------------------------------
 
   bool gauche =
@@ -865,67 +1298,91 @@ void loop()
       PIN_BOUTON_GAUCHE
     ) == LOW;
 
+
   bool droite =
     digitalRead(
       PIN_BOUTON_DROITE
     ) == LOW;
 
+
   const char *etat =
     "STOP";
 
 
-  // ----------------------------------------------------------
-  // Commande rotor
-  // ----------------------------------------------------------
+  // ==========================================================
+  // PRIORITE AUX COMMANDES MANUELLES
+  // ==========================================================
 
   if (
-    gauche &&
+    gauche ||
     droite
   )
   {
-    stopRotor();
+    // Une action manuelle annule
+    // immediatement l'asservissement.
 
-    etat = "STOP";
+    modeAutomatiqueAzimut =
+      false;
+
+    cibleAzimutAtteinte =
+      false;
+
+
+    if (
+      gauche &&
+      droite
+    )
+    {
+      stopRotor();
+
+      etat =
+        "STOP";
+    }
+
+    else if (gauche)
+    {
+      rotationCCW();
+
+      etat =
+        "CCW";
+    }
+
+    else
+    {
+      rotationCW();
+
+      etat =
+        "CW";
+    }
   }
 
-  else if (gauche)
+
+  // ==========================================================
+  // MODE AUTOMATIQUE
+  // ==========================================================
+
+  else if (
+    modeAutomatiqueAzimut
+  )
   {
-    rotationCCW();
-
-    etat = "CCW";
+    etat =
+      piloterAzimutAutomatique(
+        angle
+      );
   }
 
-  else if (droite)
-  {
-    rotationCW();
 
-    etat = "CW";
-  }
+  // ==========================================================
+  // REPOS
+  // ==========================================================
 
   else
   {
     stopRotor();
 
-    etat = "STOP";
+    etat =
+      "STOP";
   }
-
-
-  // ----------------------------------------------------------
-  // Position
-  // ----------------------------------------------------------
-
-  uint16_t adc =
-    lireADC();
-
-  float angleBrut =
-    adcVersAngle(
-      adc
-    );
-
-  float angle =
-    filtrerAngle(
-      angleBrut
-    );
 
 
   // ----------------------------------------------------------
@@ -937,27 +1394,6 @@ void loop()
     etat
   );
 
-
-  // ----------------------------------------------------------
-  // Debug position
-  // ----------------------------------------------------------
-
-  Serial.print(
-    "ADC="
-  );
-
-  Serial.print(
-    adc
-  );
-
-  Serial.print(
-    "  Angle="
-  );
-
-  Serial.println(
-    angle,
-    1
-  );
 
   delay(50);
 }
