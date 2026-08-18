@@ -120,7 +120,7 @@ bool calibrationValide = false;
 // ASSERVISSEMENT AZIMUT
 // ============================================================
 
-const float TOLERANCE_ANGLE = 4.0;
+const float TOLERANCE_ANGLE = 2.0;
 
 bool modeAutomatiqueAzimut = false;
 bool cibleAzimutAtteinte = false;
