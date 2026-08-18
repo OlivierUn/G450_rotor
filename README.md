@@ -3,7 +3,7 @@
 Modernisation d’un contrôleur de rotor **Yaesu G-450C** avec **ESP32-C3**.
 
 <img src="projet.png" alt="Brochage ESP32-C3 SuperMini" width="600">
-
+![Projet](images/projet.png)
 
 
 Le projet permet de :
